@@ -18,7 +18,7 @@ BaseContainerType = TypeVar("BaseContainerType", bound="BaseContainer")
 
 
 def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
-    serializable = kwargs.get("serializable", False)
+    serialize = kwargs.get("serialize", False)
     if dataclasses.is_dataclass(obj):
         return _to_dict(dataclasses.asdict(obj), **kwargs)
     elif hasattr(obj, "to_dict"):
@@ -29,7 +29,7 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
         return tuple(_to_dict(x, **kwargs) for x in obj)
     elif isinstance(obj, dict):
         return {_to_dict(k, **kwargs): _to_dict(v, **kwargs) for k, v in obj.items()}
-    if serializable:
+    if serialize:
         if isinstance(obj, enum.Enum):
             return obj.value
         elif isinstance(obj, dt.datetime):
@@ -43,21 +43,22 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
     return obj
 
 
-def _deserialize_value(obj: Any, ref_type: Any, **kwargs) -> Any:
+def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
     if ref_type == dt.datetime and isinstance(obj, str):
         datetime_format = kwargs.get("datetime_format", None)
         if datetime_format:
-            return dt.datetime.strptime(obj, datetime_format)
+            return dt.datetime.strptime(obj, None, datetime_format)
         else:
             return dt.datetime.fromisoformat(obj)
     elif dataclasses.is_dataclass(ref_type):
-        return _deserialize_dataclass(ref_type(**obj))
+        if isinstance(obj, dict):
+            return _from_dict(ref_type(**obj), None, **kwargs)
     elif ref_type.__class__.__name__ == "EnumMeta":
         return ref_type(obj)
     elif isinstance(ref_type, typing._GenericAlias):
         type_args = list(ref_type.__args__)
         if ref_type.__origin__ == list:
-            return [_deserialize_value(value, type_args[0], **kwargs) for value in obj]
+            return [_from_dict(value, type_args[0], **kwargs) for value in obj]
         elif ref_type.__origin__ == tuple:
             if len(type_args) == 1:
                 type_args = [type_args[0]] * len(obj)
@@ -68,33 +69,21 @@ def _deserialize_value(obj: Any, ref_type: Any, **kwargs) -> Any:
                     f"tuple length is not match: typing ({ref_type}) vs values {obj}"
                 )
             return tuple(
-                _deserialize_value(value, type_arg, **kwargs)
+                _from_dict(value, type_arg, **kwargs)
                 for type_arg, value in zip(type_args, obj)
             )
         elif ref_type.__origin__ == dict:
-            key_type, value_type = type_args
+            k_type, v_type = type_args
             return {
-                _deserialize_value(key, key_type, **kwargs): _deserialize_value(
-                    value, value_type, **kwargs
-                )
-                for key, value in obj.items()
+                _from_dict(k, k_type, **kwargs): _from_dict(v, v_type, **kwargs)
+                for k, v in obj.items()
             }
-    return obj
-
-
-def _deserialize_dataclass(
-    obj: Any,
-    datetime_format: Optional[str] = None,
-) -> Any:
-    if not dataclasses.is_dataclass(obj):
-        raise TypeError(f"{type(obj)} is not dataclass")
-    for field in dataclasses.fields(obj):
-        value = getattr(obj, field.name)
-        if type(value) != field.type:
-            value = _deserialize_value(
-                value, field.type, datetime_format=datetime_format
-            )
-            setattr(obj, field.name, value)
+    elif dataclasses.is_dataclass(obj):
+        for field in dataclasses.fields(obj):
+            value = getattr(obj, field.name)
+            if type(value) != field.type:
+                value = _from_dict(value, field.type, **kwargs)
+                setattr(obj, field.name, value)
     return obj
 
 
@@ -106,42 +95,105 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         data: Dict[str, Any],
         datetime_format: Optional[str] = None,
     ) -> BaseContainerType:
+        """Convert dict to user-defined class object that inherits from BaseContainer.
+        Nested dict objects are also converted to appropriate class.
+
+        Args:
+            data (dict): Dict object to be converted.
+            datetime_format (str): Format for converting datetime with `datetime.strptime`.
+                If not specified, it is converted by iso-format.
+
+        Returns:
+            object: Converted user-defined class object.
+        """
         if hasattr(cls, "__dataclass_fields__"):
-            return _deserialize_dataclass(cls(**data), datetime_format=datetime_format)
+            return _from_dict(cls(**data), None, datetime_format=datetime_format)
         raise NotImplementedError
 
     @classmethod
-    def from_json(cls, filename: Union[str, Path]) -> BaseContainerType:
-        with open(str(filename), "r") as fh:
+    def from_json(
+        cls,
+        path: Union[str, Path],
+        datetime_format: Optional[str] = None,
+    ) -> BaseContainerType:
+        """Convert JSON file to user-defined class object that inherits from BaseContainer.
+
+        Args:
+            path (str or `pathlib.Path`): Input JSON file path.
+            datetime_format (str): Format for converting datetime with `datetime.strptime`.
+                If not specified, it is converted by iso-format.
+
+        Returns:
+            object: Converted user-defined class object.
+        """
+        with open(str(path), "r") as fh:
             data = json.load(fh)
-        return cls.from_dict(data)
+        return cls.from_dict(data, datetime_format=datetime_format)
 
     @classmethod
-    def from_yaml(cls, filename: Union[str, Path]) -> BaseContainerType:
+    def from_yaml(
+        cls,
+        path: Union[str, Path],
+        datetime_format: Optional[str] = None,
+    ) -> BaseContainerType:
+        """Convert YAML file to user-defined class object that inherits from BaseContainer.
+
+        Args:
+            path (str or `pathlib.Path`): Input YAML file path.
+            datetime_format (str): Format for converting datetime with `datetime.strptime`.
+                If not specified, it is converted by iso-format.
+
+        Returns:
+            object: Converted user-defined class object.
+        """
         if not installed_pyyaml:
             raise RuntimeError("PyYAML is not installed")
-        with open(str(filename), "r") as fh:
+        with open(str(path), "r") as fh:
             data = yaml.safe_load(fh)
-        return cls.from_dict(data)
+        return cls.from_dict(data, datetime_format=datetime_format)
 
     @classmethod
-    def from_file(cls, filename: Union[str, Path]) -> BaseContainerType:
-        filename = Path(filename)
-        if filename.suffix == ".json":
-            return cls.from_json(filename)
-        elif filename.suffix in [".yaml", ".yml"]:
-            return cls.from_yaml(filename)
+    def from_file(
+        cls,
+        path: Union[str, Path],
+        datetime_format: Optional[str] = None,
+    ) -> BaseContainerType:
+        """Convert YAML file to user-defined class object that inherits from BaseContainer.
+
+        Args:
+            path (str or `pathlib.Path`): Input file path.
+            datetime_format (str): Format for converting datetime with `datetime.strptime`.
+                If not specified, it is converted by iso-format.
+
+        Returns:
+            object: Converted user-defined class object.
+        """
+        path = Path(path)
+        if path.suffix == ".json":
+            return cls.from_json(path, datetime_format=datetime_format)
+        elif path.suffix in [".yaml", ".yml"]:
+            return cls.from_yaml(path, datetime_format=datetime_format)
         else:
-            raise ValueError(f"{filename.suffix} is not supported file format")
+            raise ValueError(f"{path.suffix} is not supported file format")
 
     def to_dict(
         self,
-        serializable: bool = False,
+        serialize: bool = False,
         datetime_format: Optional[str] = None,
     ) -> Dict[str, Any]:
+        """Convert user-defined class object that inherits from BaseContainer to dict.
+
+        Args:
+            serialize (bool): Whether the leaf object should be serializable or not.
+            datetime_format (str): Format for converting datetime with `datetime.stfptime`.
+                If not specified, it is converted by iso-format.
+
+        Returns:
+            dict: Converted dict object.
+        """
         return _to_dict(
             self,
-            serializable=serializable,
+            serialize=serialize,
             datetime_format=datetime_format,
         )
 
@@ -152,7 +204,16 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         indent: Optional[int] = None,
         ensure_ascii: bool = True,
     ) -> None:
-        data = self.to_dict(serializable=True, datetime_format=datetime_format)
+        """Convert user-defined class object that inherits from BaseContainer to JSON file.
+
+        Args:
+            path (str or `pathlib.Path`): Output JSON file path.
+            datetime_format (str): Format for converting datetime with `datetime.stfptime`.
+                If not specified, it is converted by iso-format.
+            indent (int): Same as `indent` of `json.dump`.
+            ensure_ascii (bool): Same as `ensure_ascii` of `json.dump`.
+        """
+        data = self.to_dict(serialize=True, datetime_format=datetime_format)
         with open(str(path), "w") as fp:
             json.dump(data, fp, indent=indent, ensure_ascii=ensure_ascii)
 
@@ -161,8 +222,15 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         path: Union[str, Path],
         datetime_format: Optional[str] = None,
     ) -> None:
+        """Convert user-defined class object that inherits from BaseContainer to YAML file.
+
+        Args:
+            path (str or `pathlib.Path`): Output YAML file path.
+            datetime_format (str): Format for converting datetime with `datetime.stfptime`.
+                If not specified, it is converted by iso-format.
+        """
         if not installed_pyyaml:
             raise RuntimeError("PyYAML is not installed")
-        data = self.to_dict(serializable=True, datetime_format=datetime_format)
+        data = self.to_dict(serialize=True, datetime_format=datetime_format)
         with open(str(path), "w") as fp:
             yaml.safe_dump(data, fp)
