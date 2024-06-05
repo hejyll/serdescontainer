@@ -84,6 +84,8 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
 
     @classmethod
     def from_yaml(cls, filename: Union[str, Path]) -> BaseContainerType:
+        if not installed_pyyaml:
+            raise RuntimeError("PyYAML is not installed")
         with open(str(filename), "r") as fh:
             data = yaml.safe_load(fh)
         return cls.from_dict(data)
