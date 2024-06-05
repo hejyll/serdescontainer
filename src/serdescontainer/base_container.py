@@ -3,6 +3,7 @@ import dataclasses
 import datetime as dt
 import enum
 import json
+import typing
 from pathlib import Path
 from typing import Any, Dict, Generic, Optional, TypeVar, Union
 
@@ -25,9 +26,9 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
     elif isinstance(obj, list):
         return [_to_dict(x, **kwargs) for x in obj]
     elif isinstance(obj, tuple):
-        return (_to_dict(x, **kwargs) for x in obj)
+        return tuple(_to_dict(x, **kwargs) for x in obj)
     elif isinstance(obj, dict):
-        return {k: _to_dict(v, **kwargs) for k, v in obj.items()}
+        return {_to_dict(k, **kwargs): _to_dict(v, **kwargs) for k, v in obj.items()}
     if serializable:
         if isinstance(obj, enum.Enum):
             return obj.value
@@ -42,7 +43,46 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
     return obj
 
 
-def _deserialize(
+def _deserialize_value(obj: Any, ref_type: Any, **kwargs) -> Any:
+    if ref_type == dt.datetime and isinstance(obj, str):
+        datetime_format = kwargs.get("datetime_format", None)
+        if datetime_format:
+            return dt.datetime.strptime(obj, datetime_format)
+        else:
+            return dt.datetime.fromisoformat(obj)
+    elif dataclasses.is_dataclass(ref_type):
+        return _deserialize_dataclass(ref_type(**obj))
+    elif ref_type.__class__.__name__ == "EnumMeta":
+        return ref_type(obj)
+    elif isinstance(ref_type, typing._GenericAlias):
+        type_args = list(ref_type.__args__)
+        if ref_type.__origin__ == list:
+            return [_deserialize_value(value, type_args[0], **kwargs) for value in obj]
+        elif ref_type.__origin__ == tuple:
+            if len(type_args) == 1:
+                type_args = [type_args[0]] * len(obj)
+            elif len(type_args) == 2 and type_args[-1] == Ellipsis:
+                type_args = [type_args[0]] * len(obj)
+            if len(type_args) != len(obj):
+                raise TypeError(
+                    f"tuple length is not match: typing ({ref_type}) vs values {obj}"
+                )
+            return tuple(
+                _deserialize_value(value, type_arg, **kwargs)
+                for type_arg, value in zip(type_args, obj)
+            )
+        elif ref_type.__origin__ == dict:
+            key_type, value_type = type_args
+            return {
+                _deserialize_value(key, key_type, **kwargs): _deserialize_value(
+                    value, value_type, **kwargs
+                )
+                for key, value in obj.items()
+            }
+    return obj
+
+
+def _deserialize_dataclass(
     obj: Any,
     datetime_format: Optional[str] = None,
 ) -> Any:
@@ -51,15 +91,9 @@ def _deserialize(
     for field in dataclasses.fields(obj):
         value = getattr(obj, field.name)
         if type(value) != field.type:
-            if field.type == dt.datetime and isinstance(value, str):
-                if datetime_format:
-                    value = dt.datetime.strptime(value, datetime_format)
-                else:
-                    value = dt.datetime.fromisoformat(value)
-            elif dataclasses.is_dataclass(field.type):
-                value = _deserialize(field.type(**value))
-            elif field.type.__class__.__name__ == "EnumMeta":
-                value = field.type(value)
+            value = _deserialize_value(
+                value, field.type, datetime_format=datetime_format
+            )
             setattr(obj, field.name, value)
     return obj
 
@@ -73,7 +107,7 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         datetime_format: Optional[str] = None,
     ) -> BaseContainerType:
         if hasattr(cls, "__dataclass_fields__"):
-            return _deserialize(cls(**data), datetime_format=datetime_format)
+            return _deserialize_dataclass(cls(**data), datetime_format=datetime_format)
         raise NotImplementedError
 
     @classmethod
