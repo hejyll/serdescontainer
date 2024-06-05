@@ -179,27 +179,33 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
     def to_dict(
         self,
         serialize: bool = False,
+        ignore_none_fields: bool = False,
         datetime_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Convert user-defined class object that inherits from BaseContainer to dict.
 
         Args:
             serialize (bool): Whether the leaf object should be serializable or not.
+            ignore_none_fields (bool): Fields with the value None are not output.
             datetime_format (str): Format for converting datetime with `datetime.stfptime`.
                 If not specified, it is converted by iso-format.
 
         Returns:
             dict: Converted dict object.
         """
-        return _to_dict(
+        ret = _to_dict(
             self,
             serialize=serialize,
             datetime_format=datetime_format,
         )
+        if ignore_none_fields:
+            ret = {key: value for key, value in ret.items() if value is not None}
+        return ret
 
     def to_json(
         self,
         path: Union[str, Path],
+        ignore_none_fields: bool = False,
         datetime_format: Optional[str] = None,
         indent: Optional[int] = None,
         ensure_ascii: bool = True,
@@ -208,29 +214,40 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
 
         Args:
             path (str or `pathlib.Path`): Output JSON file path.
+            ignore_none_fields (bool): Fields with the value None are not output.
             datetime_format (str): Format for converting datetime with `datetime.stfptime`.
                 If not specified, it is converted by iso-format.
             indent (int): Same as `indent` of `json.dump`.
             ensure_ascii (bool): Same as `ensure_ascii` of `json.dump`.
         """
-        data = self.to_dict(serialize=True, datetime_format=datetime_format)
+        data = self.to_dict(
+            serialize=True,
+            ignore_none_fields=ignore_none_fields,
+            datetime_format=datetime_format,
+        )
         with open(str(path), "w") as fp:
             json.dump(data, fp, indent=indent, ensure_ascii=ensure_ascii)
 
     def to_yaml(
         self,
         path: Union[str, Path],
+        ignore_none_fields: bool = False,
         datetime_format: Optional[str] = None,
     ) -> None:
         """Convert user-defined class object that inherits from BaseContainer to YAML file.
 
         Args:
             path (str or `pathlib.Path`): Output YAML file path.
+            ignore_none_fields (bool): Fields with the value None are not output.
             datetime_format (str): Format for converting datetime with `datetime.stfptime`.
                 If not specified, it is converted by iso-format.
         """
         if not installed_pyyaml:
             raise RuntimeError("PyYAML is not installed")
-        data = self.to_dict(serialize=True, datetime_format=datetime_format)
+        data = self.to_dict(
+            serialize=True,
+            ignore_none_fields=ignore_none_fields,
+            datetime_format=datetime_format,
+        )
         with open(str(path), "w") as fp:
             yaml.safe_dump(data, fp)
