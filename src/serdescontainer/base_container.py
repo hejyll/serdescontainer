@@ -3,9 +3,10 @@ import dataclasses
 import datetime as dt
 import enum
 import json
+import re
 import typing
 from pathlib import Path
-from typing import Any, Dict, Generic, Optional, TypeVar, Union
+from typing import Any, Dict, Generic, List, Optional, TypeVar, Union
 
 try:
     import yaml
@@ -18,6 +19,10 @@ BaseContainerType = TypeVar("BaseContainerType", bound="BaseContainer")
 
 
 def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
+    unserialized_types = kwargs.get("unserialized_types", [])
+    if type(obj) in unserialized_types:
+        return obj
+
     serialize = kwargs.get("serialize", False)
     if dataclasses.is_dataclass(obj):
         return _to_dict(dataclasses.asdict(obj), **kwargs)
@@ -43,18 +48,41 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
     return obj
 
 
+def _get_class_name(type: Any) -> str:
+    # e.g. "<class 'Hoge'>", "<enum 'FugaEnum'>"
+    return re.match(r"<.+? '(.+?)'>", str(type)).groups()[0]
+
+
+def _instantiate_type(type: str, custom_types: List[Any]) -> Any:
+    try:
+        return eval(f"typing.{type}")
+    except:
+        try:
+            return eval(type)
+        except:
+            for custom_type in custom_types:
+                class_name = _get_class_name(custom_type)
+                base_name = class_name.split(".")[-1]
+                if type == base_name:
+                    return custom_type
+            return type
+
+
 def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
-    if ref_type == dt.datetime and isinstance(obj, str):
-        datetime_format = kwargs.get("datetime_format", None)
-        if datetime_format:
-            return dt.datetime.strptime(obj, None, datetime_format)
-        else:
-            return dt.datetime.fromisoformat(obj)
-    elif dataclasses.is_dataclass(ref_type):
-        if isinstance(obj, dict):
-            return _from_dict(ref_type(**obj), None, **kwargs)
-    elif ref_type.__class__.__name__ == "EnumMeta":
-        return ref_type(obj)
+    # TODO: automatic retrieval of custom types without user assignment
+    custom_types = kwargs.get("custom_types", [])
+    if isinstance(ref_type, str):
+        if ref_type.startswith("Optional["):
+            # remove 'Optional[]'
+            ref_type = ref_type.replace("Optional[", "", 1)[:-1]
+            return _from_dict(obj, ref_type, **kwargs)
+        ref_type = _instantiate_type(ref_type, custom_types)
+    if hasattr(ref_type, "custom_types"):
+        custom_types += ref_type.custom_types()
+        kwargs["custom_types"] = custom_types
+
+    if obj is None:
+        return None
     elif isinstance(ref_type, typing._GenericAlias):
         type_args = list(ref_type.__args__)
         if ref_type.__origin__ == list:
@@ -78,6 +106,17 @@ def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
                 _from_dict(k, k_type, **kwargs): _from_dict(v, v_type, **kwargs)
                 for k, v in obj.items()
             }
+    elif ref_type == dt.datetime and isinstance(obj, str):
+        datetime_format = kwargs.get("datetime_format", None)
+        if datetime_format:
+            return dt.datetime.strptime(obj, None, datetime_format)
+        else:
+            return dt.datetime.fromisoformat(obj)
+    elif ref_type.__class__.__name__ == "EnumMeta":
+        return ref_type(obj)
+    elif dataclasses.is_dataclass(ref_type):
+        if isinstance(obj, dict):
+            return _from_dict(ref_type(**obj), None, **kwargs)
     elif dataclasses.is_dataclass(obj):
         for field in dataclasses.fields(obj):
             value = getattr(obj, field.name)
@@ -88,6 +127,17 @@ def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
 
 
 class BaseContainer(abc.ABC, Generic[BaseContainerType]):
+
+    def custom_types() -> List[Any]:
+        """Specifies user-defined classes used in attribute for `from_dict`.
+
+        TODO:
+            automatic retrieval of custom types without user assignment.
+
+        Returns:
+            list of classes: user-defined classes
+        """
+        return []
 
     @classmethod
     def from_dict(
@@ -107,7 +157,12 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
             object: Converted user-defined class object.
         """
         if hasattr(cls, "__dataclass_fields__"):
-            return _from_dict(cls(**data), None, datetime_format=datetime_format)
+            return _from_dict(
+                data,
+                cls,
+                custom_types=cls.custom_types(),
+                datetime_format=datetime_format,
+            )
         raise NotImplementedError
 
     @classmethod
@@ -180,12 +235,15 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         self,
         serialize: bool = False,
         ignore_none_fields: bool = False,
+        unserialized_types: List[Any] = [],
         datetime_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Convert user-defined class object that inherits from BaseContainer to dict.
 
         Args:
             serialize (bool): Whether the leaf object should be serializable or not.
+            unserialized_types (type of list): Specify types not to serialize even if serialize=True.
+                e.g. if serializing for MongoDB, you `datetime.datetime` should not be serialized.
             ignore_none_fields (bool): Fields with the value None are not output.
             datetime_format (str): Format for converting datetime with `datetime.stfptime`.
                 If not specified, it is converted by iso-format.
@@ -196,6 +254,7 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         ret = _to_dict(
             self,
             serialize=serialize,
+            unserialized_types=unserialized_types,
             datetime_format=datetime_format,
         )
         if ignore_none_fields:
