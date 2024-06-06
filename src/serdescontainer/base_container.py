@@ -19,6 +19,10 @@ BaseContainerType = TypeVar("BaseContainerType", bound="BaseContainer")
 
 
 def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
+    unserialized_types = kwargs.get("unserialized_types", [])
+    if type(obj) in unserialized_types:
+        return obj
+
     serialize = kwargs.get("serialize", False)
     if dataclasses.is_dataclass(obj):
         return _to_dict(dataclasses.asdict(obj), **kwargs)
@@ -225,12 +229,15 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         self,
         serialize: bool = False,
         ignore_none_fields: bool = False,
+        unserialized_types: List[Any] = [],
         datetime_format: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Convert user-defined class object that inherits from BaseContainer to dict.
 
         Args:
             serialize (bool): Whether the leaf object should be serializable or not.
+            unserialized_types (type of list): Specify types not to serialize even if serialize=True.
+                e.g. if serializing for MongoDB, you `datetime.datetime` should not be serialized.
             ignore_none_fields (bool): Fields with the value None are not output.
             datetime_format (str): Format for converting datetime with `datetime.stfptime`.
                 If not specified, it is converted by iso-format.
@@ -241,6 +248,7 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
         ret = _to_dict(
             self,
             serialize=serialize,
+            unserialized_types=unserialized_types,
             datetime_format=datetime_format,
         )
         if ignore_none_fields:
