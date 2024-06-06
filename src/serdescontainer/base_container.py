@@ -53,18 +53,18 @@ def _get_class_name(type: Any) -> str:
     return re.match(r"<.+? '(.+?)'>", str(type)).groups()[0]
 
 
-def _instantiate_type(type: str, custom_classes: List[Any]) -> Any:
+def _instantiate_type(type: str, custom_types: List[Any]) -> Any:
     try:
         return eval(f"typing.{type}")
     except:
         try:
             return eval(type)
         except:
-            for custom_class in custom_classes:
-                class_name = _get_class_name(custom_class)
+            for custom_type in custom_types:
+                class_name = _get_class_name(custom_type)
                 base_name = class_name.split(".")[-1]
                 if type == base_name:
-                    return custom_class
+                    return custom_type
             return type
 
 
@@ -76,8 +76,8 @@ def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
             return _from_dict(obj, ref_type, **kwargs)
 
         # TODO: automatic retrieval of custom classes without user assignment
-        custom_classes = kwargs.get("custom_classes", [])
-        ref_type = _instantiate_type(ref_type, custom_classes)
+        custom_types = kwargs.get("custom_types", [])
+        ref_type = _instantiate_type(ref_type, custom_types)
 
     if obj is None:
         return None
@@ -126,7 +126,7 @@ def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
 
 class BaseContainer(abc.ABC, Generic[BaseContainerType]):
 
-    def custom_classes() -> List[Any]:
+    def custom_types() -> List[Any]:
         """Specifies user-defined classes used in attribute for `from_dict`.
 
         Returns:
@@ -155,7 +155,7 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
             return _from_dict(
                 data,
                 cls,
-                custom_classes=cls.custom_classes(),
+                custom_types=cls.custom_types(),
                 datetime_format=datetime_format,
             )
         raise NotImplementedError
