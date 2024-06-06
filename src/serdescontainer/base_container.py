@@ -3,9 +3,10 @@ import dataclasses
 import datetime as dt
 import enum
 import json
+import re
 import typing
 from pathlib import Path
-from typing import Any, Dict, Generic, Optional, TypeVar, Union
+from typing import Any, Dict, Generic, List, Optional, TypeVar, Union
 
 try:
     import yaml
@@ -43,22 +44,35 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
     return obj
 
 
-def _instantiate_type(type: str) -> Any:
+def _get_class_name(type: Any) -> str:
+    return re.match(r"<class '(.+?)'>", str(type)).groups()[0]
+
+
+def _instantiate_type(type: str, custom_classes: List[Any]) -> Any:
     try:
         return eval(f"typing.{type}")
     except:
         try:
             return eval(type)
         except:
+            for custom_class in custom_classes:
+                class_name = _get_class_name(custom_class)
+                base_name = class_name.split(".")[-1]
+                if type == base_name:
+                    return custom_class
             return type
 
 
 def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
     if isinstance(ref_type, str):
         if ref_type.startswith("Optional["):
+            # remove 'Optional[]'
             ref_type = ref_type.replace("Optional[", "", 1)[:-1]
             return _from_dict(obj, ref_type, **kwargs)
-        ref_type = _instantiate_type(ref_type)
+
+        # TODO: automatic retrieval of custom classes without user assignment
+        custom_classes = kwargs.get("custom_classes", [])
+        ref_type = _instantiate_type(ref_type, custom_classes)
 
     if obj is None:
         return None
@@ -107,6 +121,14 @@ def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
 
 class BaseContainer(abc.ABC, Generic[BaseContainerType]):
 
+    def custom_classes() -> List[Any]:
+        """Specifies user-defined classes used in attribute for `from_dict`.
+
+        Returns:
+            list of classes: user-defined classes
+        """
+        return []
+
     @classmethod
     def from_dict(
         cls,
@@ -125,7 +147,12 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
             object: Converted user-defined class object.
         """
         if hasattr(cls, "__dataclass_fields__"):
-            return _from_dict(cls(**data), None, datetime_format=datetime_format)
+            return _from_dict(
+                data,
+                cls,
+                custom_classes=cls.custom_classes(),
+                datetime_format=datetime_format,
+            )
         raise NotImplementedError
 
     @classmethod
