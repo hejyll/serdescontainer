@@ -69,15 +69,17 @@ def _instantiate_type(type: str, custom_types: List[Any]) -> Any:
 
 
 def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
+    # TODO: automatic retrieval of custom types without user assignment
+    custom_types = kwargs.get("custom_types", [])
     if isinstance(ref_type, str):
         if ref_type.startswith("Optional["):
             # remove 'Optional[]'
             ref_type = ref_type.replace("Optional[", "", 1)[:-1]
             return _from_dict(obj, ref_type, **kwargs)
-
-        # TODO: automatic retrieval of custom classes without user assignment
-        custom_types = kwargs.get("custom_types", [])
         ref_type = _instantiate_type(ref_type, custom_types)
+    if hasattr(ref_type, "custom_types"):
+        custom_types += ref_type.custom_types()
+        kwargs["custom_types"] = custom_types
 
     if obj is None:
         return None
@@ -128,6 +130,9 @@ class BaseContainer(abc.ABC, Generic[BaseContainerType]):
 
     def custom_types() -> List[Any]:
         """Specifies user-defined classes used in attribute for `from_dict`.
+
+        TODO:
+            automatic retrieval of custom types without user assignment.
 
         Returns:
             list of classes: user-defined classes
