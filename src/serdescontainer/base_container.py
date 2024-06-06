@@ -49,7 +49,8 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
 
 
 def _get_class_name(type: Any) -> str:
-    return re.match(r"<class '(.+?)'>", str(type)).groups()[0]
+    # e.g. "<class 'Hoge'>", "<enum 'FugaEnum'>"
+    return re.match(r"<.+? '(.+?)'>", str(type)).groups()[0]
 
 
 def _instantiate_type(type: str, custom_classes: List[Any]) -> Any:
