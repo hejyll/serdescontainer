@@ -43,18 +43,25 @@ def _to_dict(obj: Any, **kwargs) -> Union[Any, Dict[str, Any]]:
     return obj
 
 
+def _instantiate_type(type: str) -> Any:
+    try:
+        return eval(f"typing.{type}")
+    except:
+        try:
+            return eval(type)
+        except:
+            return type
+
+
 def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
-    if ref_type == dt.datetime and isinstance(obj, str):
-        datetime_format = kwargs.get("datetime_format", None)
-        if datetime_format:
-            return dt.datetime.strptime(obj, None, datetime_format)
-        else:
-            return dt.datetime.fromisoformat(obj)
-    elif dataclasses.is_dataclass(ref_type):
-        if isinstance(obj, dict):
-            return _from_dict(ref_type(**obj), None, **kwargs)
-    elif ref_type.__class__.__name__ == "EnumMeta":
-        return ref_type(obj)
+    if isinstance(ref_type, str):
+        if ref_type.startswith("Optional["):
+            ref_type = ref_type.replace("Optional[", "", 1)[:-1]
+            return _from_dict(obj, ref_type, **kwargs)
+        ref_type = _instantiate_type(ref_type)
+
+    if obj is None:
+        return None
     elif isinstance(ref_type, typing._GenericAlias):
         type_args = list(ref_type.__args__)
         if ref_type.__origin__ == list:
@@ -78,6 +85,17 @@ def _from_dict(obj: Any, ref_type: Any, **kwargs) -> Any:
                 _from_dict(k, k_type, **kwargs): _from_dict(v, v_type, **kwargs)
                 for k, v in obj.items()
             }
+    elif ref_type == dt.datetime and isinstance(obj, str):
+        datetime_format = kwargs.get("datetime_format", None)
+        if datetime_format:
+            return dt.datetime.strptime(obj, None, datetime_format)
+        else:
+            return dt.datetime.fromisoformat(obj)
+    elif ref_type.__class__.__name__ == "EnumMeta":
+        return ref_type(obj)
+    elif dataclasses.is_dataclass(ref_type):
+        if isinstance(obj, dict):
+            return _from_dict(ref_type(**obj), None, **kwargs)
     elif dataclasses.is_dataclass(obj):
         for field in dataclasses.fields(obj):
             value = getattr(obj, field.name)
